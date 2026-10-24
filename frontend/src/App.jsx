@@ -1001,21 +1001,6 @@ export default function App() {
                       Batch ID: <b style={{ color: '#cbd5e1' }}>{countResult.batch_id}</b> • Latency: <b style={{ color: '#34d399' }}>{countResult.latency_ms}ms</b>
                     </div>
                   </div>
-
-                  <div style={{ display: 'flex', gap: 12 }}>
-                    <div style={{ background: 'rgba(15, 23, 42, 0.7)', border: '1px solid rgba(255,255,255,0.1)', padding: '10px 16px', borderRadius: 10, textAlign: 'center' }}>
-                      <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>AVG SIZE</div>
-                      <div style={{ fontSize: 15, fontWeight: 800, color: '#f1f5f9', marginTop: 2 }}>
-                        {countResult.kpi_stats?.avg_w || 0} × {countResult.kpi_stats?.avg_h || 0} px
-                      </div>
-                    </div>
-                    <div style={{ background: 'rgba(15, 23, 42, 0.7)', border: '1px solid rgba(255,255,255,0.1)', padding: '10px 16px', borderRadius: 10, textAlign: 'center' }}>
-                      <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>COVERAGE</div>
-                      <div style={{ fontSize: 15, fontWeight: 800, color: '#38bdf8', marginTop: 2 }}>
-                        {countResult.kpi_stats?.coverage || 0}%
-                      </div>
-                    </div>
-                  </div>
                 </div>
 
                 {/* Result Tabs & Visualizations */}

@@ -129,14 +129,6 @@ def create_kpi_html(stats: dict[str, Any] | None, status_msg: str = "") -> str:
         </div>
         <div class="kpi-grid">
             <div class="kpi-mini-card">
-                <div class="kpi-mini-label" style="color: #64748b !important;">Avg Dimensions</div>
-                <div class="kpi-mini-val" style="color: #0f172a !important;">{avg_w} × {avg_h} px</div>
-            </div>
-            <div class="kpi-mini-card">
-                <div class="kpi-mini-label" style="color: #64748b !important;">Area Coverage</div>
-                <div class="kpi-mini-val" style="color: #0f172a !important;">{coverage}%</div>
-            </div>
-            <div class="kpi-mini-card">
                 <div class="kpi-mini-label" style="color: #64748b !important;">Image Resolution</div>
                 <div class="kpi-mini-val" style="color: #0f172a !important;">{img_size}</div>
             </div>
