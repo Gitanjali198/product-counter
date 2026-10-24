@@ -1,0 +1,7 @@
+event,time_s,frame,direction,gemini_check,track_id
+1,2.40,72,forward,counted,1
+2,2.87,86,backward,counted,2
+3,3.27,98,forward,counted,3
+4,4.13,124,forward,counted,4
+5,5.00,150,forward,counted,2
+6,5.87,176,forward,counted,6

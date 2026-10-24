@@ -1,0 +1,62 @@
+[
+  {
+    "id": "BATCH-20261024-112659",
+    "timestamp": "2026-10-24 11:26:59",
+    "product": "tyre repair patches and blue liners",
+    "count": 36,
+    "foreign_count": 0,
+    "original_image": "C:\\Users\\HP\\Desktop\\UseCase\\product_counter\\data\\batches\\BATCH-20261024-112659_orig.jpg",
+    "masked_image": "C:\\Users\\HP\\Desktop\\UseCase\\product_counter\\data\\batches\\BATCH-20261024-112659_masked.jpg",
+    "notes": ""
+  },
+  {
+    "id": "BATCH-20261024-112557",
+    "timestamp": "2026-10-24 11:25:57",
+    "product": "tyre repair patches",
+    "count": 23,
+    "foreign_count": 0,
+    "original_image": "C:\\Users\\HP\\Desktop\\UseCase\\product_counter\\data\\batches\\BATCH-20261024-112557_orig.jpg",
+    "masked_image": "C:\\Users\\HP\\Desktop\\UseCase\\product_counter\\data\\batches\\BATCH-20261024-112557_masked.jpg",
+    "notes": ""
+  },
+  {
+    "id": "BATCH-20261024-111903",
+    "timestamp": "2026-10-24 11:19:03",
+    "product": "tyre repair patches and blue liners",
+    "count": 23,
+    "foreign_count": 14,
+    "original_image": "C:\\Users\\HP\\Desktop\\UseCase\\product_counter\\data\\batches\\BATCH-20261024-111903_orig.jpg",
+    "masked_image": "C:\\Users\\HP\\Desktop\\UseCase\\product_counter\\data\\batches\\BATCH-20261024-111903_masked.jpg",
+    "notes": ""
+  },
+  {
+    "id": "BATCH-20261024-111431",
+    "timestamp": "2026-10-24 11:14:31",
+    "product": "tyre repair patches",
+    "count": 23,
+    "foreign_count": 0,
+    "original_image": "C:\\Users\\HP\\Desktop\\UseCase\\product_counter\\data\\batches\\BATCH-20261024-111431_orig.jpg",
+    "masked_image": "C:\\Users\\HP\\Desktop\\UseCase\\product_counter\\data\\batches\\BATCH-20261024-111431_masked.jpg",
+    "notes": ""
+  },
+  {
+    "id": "BATCH-20261024-103545",
+    "timestamp": "2026-10-24 10:35:45",
+    "product": "OTR",
+    "count": 37,
+    "foreign_count": 0,
+    "original_image": "C:\\Users\\HP\\Desktop\\UseCase\\product_counter\\data\\batches\\BATCH-20261024-103545_orig.jpg",
+    "masked_image": "C:\\Users\\HP\\Desktop\\UseCase\\product_counter\\data\\batches\\BATCH-20261024-103545_masked.jpg",
+    "notes": ""
+  },
+  {
+    "id": "BATCH-20261024-103339",
+    "timestamp": "2026-10-24 10:33:39",
+    "product": "OTR 1",
+    "count": 101,
+    "foreign_count": 64,
+    "original_image": "C:\\Users\\HP\\Desktop\\UseCase\\product_counter\\data\\batches\\BATCH-20261024-103339_orig.jpg",
+    "masked_image": "C:\\Users\\HP\\Desktop\\UseCase\\product_counter\\data\\batches\\BATCH-20261024-103339_masked.jpg",
+    "notes": ""
+  }
+]
