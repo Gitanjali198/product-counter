@@ -2,8 +2,8 @@ google-genai>=1.0
 numpy
 pillow
 opencv-python-headless
-gradio>=4.0
 fastapi>=0.110
 uvicorn[standard]>=0.29
 python-multipart
 websockets>=12.0
+python-dotenv
