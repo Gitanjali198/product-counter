@@ -636,7 +636,7 @@ export default function App() {
                 style={{ width: '100%', padding: '8px 12px', marginTop: 10, fontSize: 12.5 }}
               >
                 <ImageIcon size={15} color="#38bdf8" />
-                Load Sample Batch Image (23 Patches)
+                Load Sample Batch Image
               </button>
             </div>
 
