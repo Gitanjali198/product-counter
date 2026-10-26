@@ -24,6 +24,8 @@ import {
   Clock,
   Eye,
   Check,
+  Smartphone,
+  RotateCcw,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -71,6 +73,10 @@ export default function App() {
   const [showLiveTuning, setShowLiveTuning] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState(null);
+  const [videoDevices, setVideoDevices] = useState([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState('');
+  const [facingMode, setFacingMode] = useState('environment'); // 'environment' (back) or 'user' (front)
+  const [showPhoneGuide, setShowPhoneGuide] = useState(false);
 
   // ----------------------------------------------------
   // TAB 2: SINGLE IMAGE COUNT & MASK
@@ -208,6 +214,25 @@ export default function App() {
   // ----------------------------------------------------
   // LIVE WEBCAM & WEBSOCKET ENGINE
   // ----------------------------------------------------
+  const updateDeviceList = async () => {
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoInputs = devices.filter((d) => d.kind === 'videoinput');
+      setVideoDevices(videoInputs);
+    } catch (err) {
+      console.warn('Could not enumerate media devices:', err);
+    }
+  };
+
+  useEffect(() => {
+    updateDeviceList();
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+      navigator.mediaDevices.addEventListener('devicechange', updateDeviceList);
+      return () => navigator.mediaDevices.removeEventListener('devicechange', updateDeviceList);
+    }
+  }, []);
+
   const toggleCamera = async () => {
     if (cameraActive) {
       stopCamera();
@@ -216,10 +241,28 @@ export default function App() {
     }
   };
 
-  const startCamera = async () => {
+  const startCamera = async (overrideDeviceId, overrideFacing) => {
     try {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+      }
+
+      const activeDevId = overrideDeviceId !== undefined ? overrideDeviceId : selectedDeviceId;
+      const activeFacing = overrideFacing !== undefined ? overrideFacing : facingMode;
+
+      const videoConstraints = {
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      };
+
+      if (activeDevId) {
+        videoConstraints.deviceId = { exact: activeDevId };
+      } else {
+        videoConstraints.facingMode = { ideal: activeFacing };
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+        video: videoConstraints,
       });
       streamRef.current = stream;
       if (videoRef.current) {
@@ -227,50 +270,80 @@ export default function App() {
         videoRef.current.play();
       }
 
-      // Connect WebSocket
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws/live`;
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
+      // Re-populate device labels with readable names after permission is granted
+      await updateDeviceList();
 
-      ws.onmessage = (event) => {
-        try {
-          const res = JSON.parse(event.data);
-          setLiveData(res);
-        } catch (e) {
-          console.error('WS parse error:', e);
-        }
-      };
+      // Connect WebSocket if not active
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/live`;
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
 
-      ws.onopen = () => {
+        ws.onmessage = (event) => {
+          try {
+            const res = JSON.parse(event.data);
+            setLiveData(res);
+          } catch (e) {
+            console.error('WS parse error:', e);
+          }
+        };
+
+        ws.onopen = () => {
+          setCameraActive(true);
+          // Offscreen canvas to encode JPEG frames at 30 FPS
+          if (!canvasRef.current) {
+            canvasRef.current = document.createElement('canvas');
+          }
+          if (sendIntervalRef.current) clearInterval(sendIntervalRef.current);
+          sendIntervalRef.current = setInterval(() => {
+            if (!videoRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+            const v = videoRef.current;
+            if (v.readyState < 2) return;
+
+            const c = canvasRef.current;
+            c.width = 640;
+            c.height = 360;
+            const ctx = c.getContext('2d');
+            ctx.drawImage(v, 0, 0, c.width, c.height);
+
+            const base64 = c.toDataURL('image/jpeg', 0.65);
+            wsRef.current.send(
+              JSON.stringify({
+                frame: base64,
+                target: target,
+                product_type: 'tyre_patches',
+              })
+            );
+          }, 33); // ~30 FPS
+        };
+
+        ws.onclose = () => {
+          if (cameraActive) setCameraActive(false);
+        };
+      } else {
         setCameraActive(true);
-        // Offscreen canvas to encode JPEG frames at 30 FPS
-        if (!canvasRef.current) {
-          canvasRef.current = document.createElement('canvas');
-        }
-        sendIntervalRef.current = setInterval(() => {
-          if (!videoRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-          const v = videoRef.current;
-          if (v.readyState < 2) return;
-
-          const c = canvasRef.current;
-          c.width = 640;
-          c.height = 360;
-          const ctx = c.getContext('2d');
-          ctx.drawImage(v, 0, 0, c.width, c.height);
-
-          const base64 = c.toDataURL('image/jpeg', 0.65);
-          wsRef.current.send(
-            JSON.stringify({
-              frame: base64,
-              target: target,
-              product_type: 'tyre_patches',
-            })
-          );
-        }, 33); // ~30 FPS
-      };
+      }
     } catch (err) {
       alert(`Could not start camera: ${err.message}. Please allow camera permissions.`);
+      setCameraActive(false);
+    }
+  };
+
+  const handleDeviceChange = async (e) => {
+    const devId = e.target.value;
+    setSelectedDeviceId(devId);
+    if (cameraActive) {
+      await startCamera(devId);
+    }
+  };
+
+  const handleFlipCamera = async () => {
+    const nextFacing = facingMode === 'environment' ? 'user' : 'environment';
+    setFacingMode(nextFacing);
+    setSelectedDeviceId(''); // clear exact device id so facingMode takes precedence
+    if (cameraActive) {
+      await startCamera('', nextFacing);
     }
   };
 
@@ -1121,6 +1194,46 @@ export default function App() {
 
             {/* Camera Action & Options */}
             <div className="glass-card" style={{ padding: '20px' }}>
+              {/* Camera Source Selector & Flip */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <label style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8' }}>
+                    📷 Camera Source / Input
+                  </label>
+                  <button
+                    onClick={handleFlipCamera}
+                    className="btn btn-secondary"
+                    title="Flip camera (Back / Front / Alternate)"
+                    style={{ padding: '4px 8px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
+                  >
+                    <RotateCcw size={12} /> Flip
+                  </button>
+                </div>
+                <select
+                  value={selectedDeviceId}
+                  onChange={handleDeviceChange}
+                  style={{
+                    width: '100%',
+                    background: '#0f172a',
+                    border: '1px solid rgba(255,255,255,0.15)',
+                    borderRadius: 8,
+                    padding: '8px 12px',
+                    color: '#ffffff',
+                    fontSize: 12.5,
+                    outline: 'none',
+                  }}
+                >
+                  <option value="">
+                    {facingMode === 'environment' ? '📱 Mobile Back Camera / Default' : '🤳 Mobile Front Camera / Default'}
+                  </option>
+                  {videoDevices.map((dev, idx) => (
+                    <option key={dev.deviceId || idx} value={dev.deviceId}>
+                      {dev.label || `Camera ${idx + 1}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <button
                 onClick={toggleCamera}
                 className={`btn ${cameraActive ? 'btn-danger' : 'btn-emerald'}`}
@@ -1135,11 +1248,65 @@ export default function App() {
                   onClick={handleVerifyAiSnapshot}
                   disabled={aiLoading}
                   className="btn btn-primary"
-                  style={{ width: '100%', padding: '12px 18px', fontSize: 13.5 }}
+                  style={{ width: '100%', padding: '12px 18px', fontSize: 13.5, marginBottom: 12 }}
                 >
                   <Sparkles size={16} />
                   {aiLoading ? 'Verifying...' : '🧠 AI Double-Check Snapshot'}
                 </button>
+              )}
+
+              {/* Mobile Phone Connection Guide Accordion */}
+              <button
+                onClick={() => setShowPhoneGuide(!showPhoneGuide)}
+                className="btn btn-secondary"
+                style={{
+                  width: '100%',
+                  padding: '9px 12px',
+                  fontSize: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  borderColor: 'rgba(56, 189, 248, 0.3)',
+                  background: showPhoneGuide ? 'rgba(14, 165, 233, 0.1)' : undefined,
+                }}
+              >
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#38bdf8', fontWeight: 600 }}>
+                  <Smartphone size={14} /> Connect Mobile Phone Camera Guide
+                </span>
+                {showPhoneGuide ? <ChevronUp size={14} color="#38bdf8" /> : <ChevronDown size={14} color="#38bdf8" />}
+              </button>
+
+              {showPhoneGuide && (
+                <div
+                  style={{
+                    marginTop: 10,
+                    padding: '12px 14px',
+                    background: 'rgba(15, 23, 42, 0.85)',
+                    borderRadius: 10,
+                    border: '1px solid rgba(56, 189, 248, 0.25)',
+                    fontSize: 12,
+                    color: '#cbd5e1',
+                    lineHeight: 1.55,
+                  }}
+                >
+                  <div style={{ fontWeight: 800, color: '#38bdf8', marginBottom: 4 }}>
+                    Option 1: Open Website on Phone (Instant & Wireless)
+                  </div>
+                  <div style={{ marginBottom: 10 }}>
+                    1. On your smartphone, open Chrome or Safari.<br />
+                    2. Go to: <b style={{ color: '#ffffff' }}>{window.location.origin}</b><br />
+                    3. Tap <b>Start Live Camera</b> and grant camera permission. It automatically activates your phone's back camera for overhead packing!
+                  </div>
+
+                  <div style={{ fontWeight: 800, color: '#34d399', marginBottom: 4 }}>
+                    Option 2: Use Phone as PC Webcam (DroidCam / Iriun)
+                  </div>
+                  <div>
+                    1. Install free <b>DroidCam</b> or <b>Iriun Webcam</b> on your mobile & PC.<br />
+                    2. Connect both to the same Wi-Fi or via USB cable.<br />
+                    3. Select <b>DroidCam Source</b> or <b>Iriun</b> from the "Camera Source" dropdown above and click <b>Start Live Camera</b>!
+                  </div>
+                </div>
               )}
             </div>
 
