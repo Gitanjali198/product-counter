@@ -87,8 +87,8 @@ class BatchStorage:
             "product": product or "General Products",
             "count": int(count),
             "foreign_count": int(foreign_count),
-            "original_image": str(orig_path.resolve()),
-            "masked_image": str(masked_path.resolve()),
+            "original_image": f"data/batches/{orig_filename}",
+            "masked_image": f"data/batches/{masked_filename}",
             "notes": notes,
         }
 

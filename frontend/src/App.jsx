@@ -1637,15 +1637,47 @@ export default function App() {
                     </button>
                   </div>
 
-                  <div style={{ borderRadius: 10, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)' }}>
+                  <div
+                    style={{
+                      borderRadius: 10,
+                      overflow: 'hidden',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      background: '#0a0f1d',
+                      minHeight: 280,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
                     <img
+                      key={`${selectedBatch.id}-${historyViewerTab}`}
                       src={`/api/batches/${selectedBatch.id}/image/${historyViewerTab === 'masked' ? 'masked' : 'orig'}`}
                       alt="Batch Viewer"
                       style={{ width: '100%', display: 'block', maxHeight: 480, objectFit: 'contain' }}
                       onError={(e) => {
                         e.target.style.display = 'none';
+                        const fallback = document.getElementById(`batch-err-${selectedBatch.id}`);
+                        if (fallback) fallback.style.display = 'flex';
                       }}
                     />
+                    <div
+                      id={`batch-err-${selectedBatch.id}`}
+                      style={{
+                        display: 'none',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '40px 20px',
+                        color: '#64748b',
+                        textAlign: 'center',
+                      }}
+                    >
+                      <AlertTriangle size={32} color="#f59e0b" style={{ marginBottom: 8 }} />
+                      <div style={{ fontSize: 14, fontWeight: 700, color: '#e2e8f0' }}>Image Not Found on Server</div>
+                      <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>
+                        The image file for this batch could not be found.
+                      </div>
+                    </div>
                   </div>
                 </>
               ) : (

@@ -423,15 +423,31 @@ def clear_all_batches():
 
 @app.get("/api/batches/{batch_id}/image/{img_type}")
 def get_batch_image(batch_id: str, img_type: str):
-    """Return image file for stored batch."""
+    """Return image file for stored batch with robust multi-platform path fallback."""
     batch = batch_storage.get_batch(batch_id)
     if not batch:
         raise HTTPException(404, "Batch not found")
+
     key = "original_image" if img_type == "orig" else "masked_image"
-    p = Path(batch.get(key, ""))
-    if not p.is_file():
-        raise HTTPException(404, "Image file not found")
-    return FileResponse(p, media_type="image/jpeg")
+    raw_path = batch.get(key, "")
+
+    candidates: list[Path] = []
+    if raw_path:
+        candidates.append(Path(raw_path))
+        # Handle Windows paths on Linux containers
+        clean_name = raw_path.replace("\\", "/").split("/")[-1]
+        candidates.append(batch_storage.storage_dir / clean_name)
+
+    # Standard convention: {batch_id}_orig.jpg / {batch_id}_masked.jpg
+    suffix = "_orig.jpg" if img_type == "orig" else "_masked.jpg"
+    candidates.append(batch_storage.storage_dir / f"{batch_id}{suffix}")
+    candidates.append(batch_storage.storage_dir / f"{batch_id}_{img_type}.jpg")
+
+    for p in candidates:
+        if p and p.is_file():
+            return FileResponse(p, media_type="image/jpeg")
+
+    raise HTTPException(404, f"Image file not found for batch {batch_id}")
 
 
 # Legacy endpoints for backwards compatibility
