@@ -457,7 +457,10 @@ if DIST_DIR.is_dir():
         file_path = DIST_DIR / full_path
         if file_path.is_file():
             return FileResponse(file_path)
-        return FileResponse(DIST_DIR / "index.html")
+        return FileResponse(
+            DIST_DIR / "index.html",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
 
 
 if __name__ == "__main__":
