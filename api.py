@@ -204,6 +204,9 @@ async def remote_camera_websocket(websocket: WebSocket, session_id: str):
             elif msg_type == "target_update":
                 session["target"] = int(msg.get("target", session["target"]))
 
+            elif msg_type == "ping":
+                await websocket.send_json({"event": "pong"})
+
             elif msg_type == "frame":
                 frame_data = msg.get("frame")
                 if not frame_data:

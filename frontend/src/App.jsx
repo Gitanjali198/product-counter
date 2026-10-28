@@ -55,6 +55,9 @@ function PhoneCameraStreamer() {
   const wsRef = useRef(null);
   const streamRef = useRef(null);
   const sendIntervalRef = useRef(null);
+  const pingIntervalRef = useRef(null);
+  const reconnectTimerRef = useRef(null);
+  const isUnmountedRef = useRef(false);
 
   const [connected, setConnected] = useState(false);
   const [facingMode, setFacingMode] = useState('environment');
@@ -62,11 +65,12 @@ function PhoneCameraStreamer() {
   const [torchOn, setTorchOn] = useState(false);
   const [hasTorch, setHasTorch] = useState(false);
 
+  // Persistent Screen Wake Lock to prevent phone from locking/sleeping
   useEffect(() => {
     let wakeLock = null;
     const requestWakeLock = async () => {
       try {
-        if ('wakeLock' in navigator) {
+        if ('wakeLock' in navigator && document.visibilityState === 'visible') {
           wakeLock = await navigator.wakeLock.request('screen');
         }
       } catch (e) {
@@ -74,10 +78,68 @@ function PhoneCameraStreamer() {
       }
     };
     requestWakeLock();
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        requestWakeLock();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
     return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       if (wakeLock) wakeLock.release().catch(() => {});
     };
   }, []);
+
+  // Connect WebSocket with Automatic Reconnection and Keep-Alive Heartbeat
+  const connectWebSocket = () => {
+    if (isUnmountedRef.current) return;
+    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws/remote-camera/live`;
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      setConnected(true);
+      ws.send(JSON.stringify({ type: 'join', role: 'phone' }));
+
+      // Keep-alive heartbeat every 10 seconds to prevent Render proxy timeouts
+      if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+      pingIntervalRef.current = setInterval(() => {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'ping' }));
+        }
+      }, 10000);
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const res = JSON.parse(event.data);
+        if (res.event === 'ack') {
+          setStatusInfo({ count: res.count, status: res.status, target: res.target || 20 });
+        }
+      } catch (e) {}
+    };
+
+    ws.onclose = () => {
+      setConnected(false);
+      if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+      // Auto-reconnect after 1 second if still active
+      if (!isUnmountedRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = setTimeout(connectWebSocket, 1000);
+      }
+    };
+
+    ws.onerror = () => {
+      ws.close();
+    };
+  };
 
   const startStream = async (facing) => {
     try {
@@ -104,57 +166,48 @@ function PhoneCameraStreamer() {
         setHasTorch(true);
       }
 
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws/remote-camera/live`;
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
+      // Connect or reconnect WebSocket
+      connectWebSocket();
 
-      ws.onopen = () => {
-        setConnected(true);
-        ws.send(JSON.stringify({ type: 'join', role: 'phone' }));
+      // Encode & send frames with backpressure flow control (75 ms ~ 13 FPS)
+      if (!canvasRef.current) {
+        canvasRef.current = document.createElement('canvas');
+      }
+      if (sendIntervalRef.current) clearInterval(sendIntervalRef.current);
 
-        if (!canvasRef.current) {
-          canvasRef.current = document.createElement('canvas');
-        }
-        if (sendIntervalRef.current) clearInterval(sendIntervalRef.current);
+      sendIntervalRef.current = setInterval(() => {
+        if (!videoRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
-        sendIntervalRef.current = setInterval(() => {
-          if (!videoRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-          const v = videoRef.current;
-          if (v.readyState < 2) return;
+        // FLOW CONTROL: Skip frame if previous frame is still buffering/uploading
+        if (wsRef.current.bufferedAmount > 65536) return;
 
-          const c = canvasRef.current;
-          c.width = 640;
-          c.height = 360;
-          const ctx = c.getContext('2d');
-          ctx.drawImage(v, 0, 0, c.width, c.height);
+        const v = videoRef.current;
+        if (v.readyState < 2) return;
 
-          const base64 = c.toDataURL('image/jpeg', 0.65);
-          wsRef.current.send(JSON.stringify({ type: 'frame', frame: base64 }));
-        }, 33);
-      };
+        const c = canvasRef.current;
+        c.width = 640;
+        c.height = 360;
+        const ctx = c.getContext('2d');
+        ctx.drawImage(v, 0, 0, c.width, c.height);
 
-      ws.onmessage = (event) => {
-        try {
-          const res = JSON.parse(event.data);
-          if (res.event === 'ack') {
-            setStatusInfo({ count: res.count, status: res.status, target: res.target || 20 });
-          }
-        } catch (e) {}
-      };
+        const base64 = c.toDataURL('image/jpeg', 0.65);
+        wsRef.current.send(JSON.stringify({ type: 'frame', frame: base64 }));
+      }, 75);
 
-      ws.onclose = () => {
-        setConnected(false);
-      };
     } catch (err) {
       alert(`Could not access mobile camera: ${err.message}. Please allow camera access in browser permissions.`);
     }
   };
 
   useEffect(() => {
+    isUnmountedRef.current = false;
     startStream(facingMode);
+
     return () => {
+      isUnmountedRef.current = true;
       if (sendIntervalRef.current) clearInterval(sendIntervalRef.current);
+      if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+      clearTimeout(reconnectTimerRef.current);
       if (wsRef.current) wsRef.current.close();
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
@@ -411,7 +464,7 @@ export default function App() {
     }
   };
 
-  // Remote Phone Camera WebSocket Stream listener
+  // Remote Phone Camera WebSocket Stream listener on Laptop
   useEffect(() => {
     if (cameraSourceType !== 'remote' || activeTab !== 'live') {
       if (remoteWsRef.current) {
@@ -421,39 +474,66 @@ export default function App() {
       return;
     }
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/remote-camera/live`;
-    const ws = new WebSocket(wsUrl);
-    remoteWsRef.current = ws;
+    let isMounted = true;
+    let reconnectTimeout = null;
+    let pingInterval = null;
 
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'join', role: 'dashboard', target }));
-    };
+    const connectDashboardWs = () => {
+      if (!isMounted) return;
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/ws/remote-camera/live`;
+      const ws = new WebSocket(wsUrl);
+      remoteWsRef.current = ws;
 
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.event === 'phone_connected') {
-          setRemotePhoneConnected(true);
-        } else if (msg.event === 'phone_disconnected') {
-          setRemotePhoneConnected(false);
-        } else if (msg.event === 'status') {
-          setRemotePhoneConnected(!!msg.phone_connected);
-        } else if (msg.event === 'live_data') {
-          setRemotePhoneConnected(true);
-          setLiveData(msg);
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ type: 'join', role: 'dashboard', target }));
+        if (pingInterval) clearInterval(pingInterval);
+        pingInterval = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping' }));
+          }
+        }, 10000);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.event === 'phone_connected') {
+            setRemotePhoneConnected(true);
+          } else if (msg.event === 'phone_disconnected') {
+            setRemotePhoneConnected(false);
+          } else if (msg.event === 'status') {
+            setRemotePhoneConnected(!!msg.phone_connected);
+          } else if (msg.event === 'live_data') {
+            setRemotePhoneConnected(true);
+            setLiveData(msg);
+          }
+        } catch (e) {
+          console.error('Remote WS parse error:', e);
         }
-      } catch (e) {
-        console.error('Remote WS parse error:', e);
-      }
+      };
+
+      ws.onclose = () => {
+        if (pingInterval) clearInterval(pingInterval);
+        if (isMounted) {
+          setRemotePhoneConnected(false);
+          clearTimeout(reconnectTimeout);
+          reconnectTimeout = setTimeout(connectDashboardWs, 1000);
+        }
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
     };
 
-    ws.onclose = () => {
-      setRemotePhoneConnected(false);
-    };
+    connectDashboardWs();
 
     return () => {
-      ws.close();
+      isMounted = false;
+      clearTimeout(reconnectTimeout);
+      if (pingInterval) clearInterval(pingInterval);
+      if (remoteWsRef.current) remoteWsRef.current.close();
     };
   }, [cameraSourceType, activeTab]);
 
