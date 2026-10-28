@@ -150,6 +150,133 @@ async def websocket_live_stream(websocket: WebSocket):
         print(f"WebSocket live error: {e}")
 
 
+# Multi-Device Remote Camera Relay
+class RemoteCameraRelay:
+    def __init__(self):
+        self.sessions: dict[str, dict[str, Any]] = {}
+
+    def get_or_create(self, session_id: str) -> dict[str, Any]:
+        if session_id not in self.sessions:
+            self.sessions[session_id] = {
+                "dashboard_ws": set(),
+                "phone_ws": set(),
+                "target": 20,
+                "product_type": "tyre_patches",
+            }
+        return self.sessions[session_id]
+
+camera_relay = RemoteCameraRelay()
+
+
+@app.websocket("/ws/remote-camera/{session_id}")
+async def remote_camera_websocket(websocket: WebSocket, session_id: str):
+    """Zero-app remote phone camera streamer relay.
+
+    Receives live camera frames from a mobile phone browser, processes through the
+    AI product counter, and streams the annotated video & metrics live to the laptop dashboard.
+    """
+    await websocket.accept()
+    session = camera_relay.get_or_create(session_id)
+    role = None
+    try:
+        while True:
+            msg = await websocket.receive_json()
+            msg_type = msg.get("type")
+
+            if msg_type == "join":
+                role = msg.get("role", "dashboard")
+                if role == "phone":
+                    session["phone_ws"].add(websocket)
+                    for d_ws in list(session["dashboard_ws"]):
+                        try:
+                            await d_ws.send_json({"event": "phone_connected", "phone_count": len(session["phone_ws"])})
+                        except Exception:
+                            pass
+                else:
+                    session["dashboard_ws"].add(websocket)
+                    if "target" in msg:
+                        session["target"] = int(msg["target"])
+                    await websocket.send_json({
+                        "event": "status",
+                        "phone_connected": len(session["phone_ws"]) > 0,
+                    })
+
+            elif msg_type == "target_update":
+                session["target"] = int(msg.get("target", session["target"]))
+
+            elif msg_type == "frame":
+                frame_data = msg.get("frame")
+                if not frame_data:
+                    continue
+                if "," in frame_data:
+                    frame_data = frame_data.split(",", 1)[1]
+
+                img_bytes = base64.b64decode(frame_data)
+                nparr = np.frombuffer(img_bytes, np.uint8)
+                bgr_frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+                if bgr_frame is None:
+                    continue
+
+                target = session.get("target", 20)
+                prod_type = session.get("product_type", "tyre_patches")
+
+                ann_bgr, count, status, info = detect_live_products(
+                    bgr_frame,
+                    target_count=target,
+                    product_type=prod_type,
+                )
+
+                _, buf = cv2.imencode(".jpg", ann_bgr, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                ann_b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+
+                payload = {
+                    "event": "live_data",
+                    "count": count,
+                    "target": target,
+                    "diff": count - target,
+                    "needed": max(0, target - count),
+                    "excess": max(0, count - target),
+                    "status": status,
+                    "status_text": info.get("status_text", ""),
+                    "foreign_count": info.get("foreign_count", 0),
+                    "foreign_items": [fo.get("desc", "Foreign Object") for fo in info.get("foreign_items", [])],
+                    "latency_ms": info.get("latency_ms", 10.0),
+                    "annotated_frame": f"data:image/jpeg;base64,{ann_b64}",
+                }
+
+                for d_ws in list(session["dashboard_ws"]):
+                    try:
+                        await d_ws.send_json(payload)
+                    except Exception:
+                        session["dashboard_ws"].discard(d_ws)
+
+                try:
+                    await websocket.send_json({
+                        "event": "ack",
+                        "count": count,
+                        "status": status,
+                        "target": target,
+                    })
+                except Exception:
+                    pass
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"Remote camera WS error: {e}")
+    finally:
+        if role == "phone":
+            session["phone_ws"].discard(websocket)
+            for d_ws in list(session["dashboard_ws"]):
+                try:
+                    await d_ws.send_json({"event": "phone_disconnected"})
+                except Exception:
+                    pass
+        elif role == "dashboard":
+            session["dashboard_ws"].discard(websocket)
+
+
 @app.post("/api/verify_ai")
 async def verify_ai_snapshot(
     file: UploadFile = File(...),

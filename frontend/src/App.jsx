@@ -26,6 +26,10 @@ import {
   Check,
   Smartphone,
   RotateCcw,
+  QrCode,
+  Copy,
+  Laptop,
+  ExternalLink,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -45,7 +49,196 @@ const PALETTE_OPTIONS = [
   { label: 'High Contrast Neon', value: 'high_contrast' },
 ];
 
+function PhoneCameraStreamer() {
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const wsRef = useRef(null);
+  const streamRef = useRef(null);
+  const sendIntervalRef = useRef(null);
+
+  const [connected, setConnected] = useState(false);
+  const [facingMode, setFacingMode] = useState('environment');
+  const [statusInfo, setStatusInfo] = useState({ count: 0, status: 'WAITING', target: 20 });
+  const [torchOn, setTorchOn] = useState(false);
+  const [hasTorch, setHasTorch] = useState(false);
+
+  useEffect(() => {
+    let wakeLock = null;
+    const requestWakeLock = async () => {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLock = await navigator.wakeLock.request('screen');
+        }
+      } catch (e) {
+        console.warn('WakeLock error:', e);
+      }
+    };
+    requestWakeLock();
+    return () => {
+      if (wakeLock) wakeLock.release().catch(() => {});
+    };
+  }, []);
+
+  const startStream = async (facing) => {
+    try {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+      }
+      const activeFacing = facing || facingMode;
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: activeFacing },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+      }
+
+      const track = stream.getVideoTracks()[0];
+      const capabilities = track.getCapabilities ? track.getCapabilities() : {};
+      if (capabilities.torch) {
+        setHasTorch(true);
+      }
+
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/ws/remote-camera/live`;
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        setConnected(true);
+        ws.send(JSON.stringify({ type: 'join', role: 'phone' }));
+
+        if (!canvasRef.current) {
+          canvasRef.current = document.createElement('canvas');
+        }
+        if (sendIntervalRef.current) clearInterval(sendIntervalRef.current);
+
+        sendIntervalRef.current = setInterval(() => {
+          if (!videoRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+          const v = videoRef.current;
+          if (v.readyState < 2) return;
+
+          const c = canvasRef.current;
+          c.width = 640;
+          c.height = 360;
+          const ctx = c.getContext('2d');
+          ctx.drawImage(v, 0, 0, c.width, c.height);
+
+          const base64 = c.toDataURL('image/jpeg', 0.65);
+          wsRef.current.send(JSON.stringify({ type: 'frame', frame: base64 }));
+        }, 33);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const res = JSON.parse(event.data);
+          if (res.event === 'ack') {
+            setStatusInfo({ count: res.count, status: res.status, target: res.target || 20 });
+          }
+        } catch (e) {}
+      };
+
+      ws.onclose = () => {
+        setConnected(false);
+      };
+    } catch (err) {
+      alert(`Could not access mobile camera: ${err.message}. Please allow camera access in browser permissions.`);
+    }
+  };
+
+  useEffect(() => {
+    startStream(facingMode);
+    return () => {
+      if (sendIntervalRef.current) clearInterval(sendIntervalRef.current);
+      if (wsRef.current) wsRef.current.close();
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+      }
+    };
+  }, []);
+
+  const handleFlip = () => {
+    const nextFacing = facingMode === 'environment' ? 'user' : 'environment';
+    setFacingMode(nextFacing);
+    startStream(nextFacing);
+  };
+
+  const handleTorch = async () => {
+    if (!streamRef.current) return;
+    const track = streamRef.current.getVideoTracks()[0];
+    if (track && track.applyConstraints) {
+      try {
+        await track.applyConstraints({ advanced: [{ torch: !torchOn }] });
+        setTorchOn(!torchOn);
+      } catch (e) {
+        console.warn('Torch error:', e);
+      }
+    }
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: '#000', color: '#fff', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, padding: '14px 18px', background: 'linear-gradient(to bottom, rgba(0,0,0,0.85), transparent)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 800, color: '#38bdf8', letterSpacing: 0.5 }}>
+            📱 MOBILE CAMERA STREAMER
+          </div>
+          <div style={{ fontSize: 11, color: connected ? '#34d399' : '#f59e0b', display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: connected ? '#34d399' : '#f59e0b', display: 'inline-block' }} />
+            {connected ? 'Streaming live to Laptop Dashboard' : 'Connecting to Laptop...'}
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          {hasTorch && (
+            <button onClick={handleTorch} className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: 12 }}>
+              <Zap size={15} color={torchOn ? '#facc15' : '#fff'} />
+            </button>
+          )}
+          <button onClick={handleFlip} className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: 12 }}>
+            <RotateCcw size={15} /> Flip
+          </button>
+        </div>
+      </div>
+
+      <video ref={videoRef} playsInline autoPlay muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+
+      <div style={{ position: 'absolute', bottom: 16, left: 16, right: 16, zIndex: 10, background: 'rgba(15, 23, 42, 0.9)', backdropFilter: 'blur(10px)', border: '1px solid rgba(56, 189, 248, 0.3)', borderRadius: 14, padding: '14px 18px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>AI COUNT ON LAPTOP</div>
+            <div style={{ fontSize: 24, fontWeight: 900, color: '#ffffff' }}>
+              {statusInfo.count} <span style={{ fontSize: 14, color: '#38bdf8' }}>/ {statusInfo.target} items</span>
+            </div>
+          </div>
+          <div style={{ padding: '6px 14px', borderRadius: 8, fontSize: 12, fontWeight: 800, background: statusInfo.status === 'MATCH' ? '#059669' : statusInfo.status === 'OVER' ? '#dc2626' : '#0284c7', color: '#fff' }}>
+            {statusInfo.status}
+          </div>
+        </div>
+        <div style={{ fontSize: 11.5, color: '#94a3b8', marginTop: 8, textAlign: 'center' }}>
+          💻 All packing controls, target settings & audit records are running on your laptop screen.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
+  const isCamMode =
+    typeof window !== 'undefined' &&
+    (window.location.pathname.startsWith('/cam') ||
+      window.location.hash === '#cam' ||
+      window.location.search.includes('cam='));
+
+  if (isCamMode) {
+    return <PhoneCameraStreamer />;
+  }
+
   // Navigation
   const [activeTab, setActiveTab] = useState('single'); // 'single' | 'live' | 'history'
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -57,6 +250,10 @@ export default function App() {
   // TAB 1: LIVE PACKING ASSISTANT
   // ----------------------------------------------------
   const [cameraActive, setCameraActive] = useState(false);
+  const [cameraSourceType, setCameraSourceType] = useState('local'); // 'local' | 'remote'
+  const [remotePhoneConnected, setRemotePhoneConnected] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const remoteWsRef = useRef(null);
   const [liveData, setLiveData] = useState({
     count: 0,
     target: 20,
@@ -209,7 +406,56 @@ export default function App() {
         status,
       };
     });
+    if (remoteWsRef.current && remoteWsRef.current.readyState === WebSocket.OPEN) {
+      remoteWsRef.current.send(JSON.stringify({ type: 'target_update', target: t }));
+    }
   };
+
+  // Remote Phone Camera WebSocket Stream listener
+  useEffect(() => {
+    if (cameraSourceType !== 'remote' || activeTab !== 'live') {
+      if (remoteWsRef.current) {
+        remoteWsRef.current.close();
+        remoteWsRef.current = null;
+      }
+      return;
+    }
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws/remote-camera/live`;
+    const ws = new WebSocket(wsUrl);
+    remoteWsRef.current = ws;
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: 'join', role: 'dashboard', target }));
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.event === 'phone_connected') {
+          setRemotePhoneConnected(true);
+        } else if (msg.event === 'phone_disconnected') {
+          setRemotePhoneConnected(false);
+        } else if (msg.event === 'status') {
+          setRemotePhoneConnected(!!msg.phone_connected);
+        } else if (msg.event === 'live_data') {
+          setRemotePhoneConnected(true);
+          setLiveData(msg);
+        }
+      } catch (e) {
+        console.error('Remote WS parse error:', e);
+      }
+    };
+
+    ws.onclose = () => {
+      setRemotePhoneConnected(false);
+    };
+
+    return () => {
+      ws.close();
+    };
+  }, [cameraSourceType, activeTab]);
 
   // ----------------------------------------------------
   // LIVE WEBCAM & WEBSOCKET ENGINE
@@ -1194,119 +1440,127 @@ export default function App() {
 
             {/* Camera Action & Options */}
             <div className="glass-card" style={{ padding: '20px' }}>
-              {/* Camera Source Selector & Flip */}
-              <div style={{ marginBottom: 14 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                  <label style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8' }}>
-                    📷 Camera Source / Input
-                  </label>
-                  <button
-                    onClick={handleFlipCamera}
-                    className="btn btn-secondary"
-                    title="Flip camera (Back / Front / Alternate)"
-                    style={{ padding: '4px 8px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
-                  >
-                    <RotateCcw size={12} /> Flip
-                  </button>
-                </div>
-                <select
-                  value={selectedDeviceId}
-                  onChange={handleDeviceChange}
-                  style={{
-                    width: '100%',
-                    background: '#0f172a',
-                    border: '1px solid rgba(255,255,255,0.15)',
-                    borderRadius: 8,
-                    padding: '8px 12px',
-                    color: '#ffffff',
-                    fontSize: 12.5,
-                    outline: 'none',
-                  }}
+              {/* Camera Mode Tabs: Laptop Webcam vs Phone Camera */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 14 }}>
+                <button
+                  onClick={() => setCameraSourceType('local')}
+                  className={`btn ${cameraSourceType === 'local' ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ padding: '8px 10px', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
                 >
-                  <option value="">
-                    {facingMode === 'environment' ? '📱 Mobile Back Camera / Default' : '🤳 Mobile Front Camera / Default'}
-                  </option>
-                  {videoDevices.map((dev, idx) => (
-                    <option key={dev.deviceId || idx} value={dev.deviceId}>
-                      {dev.label || `Camera ${idx + 1}`}
-                    </option>
-                  ))}
-                </select>
+                  <Laptop size={14} /> Laptop Webcam
+                </button>
+                <button
+                  onClick={() => {
+                    if (cameraActive) stopCamera();
+                    setCameraSourceType('remote');
+                  }}
+                  className={`btn ${cameraSourceType === 'remote' ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ padding: '8px 10px', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                >
+                  <Smartphone size={14} /> Phone Camera
+                </button>
               </div>
 
-              <button
-                onClick={toggleCamera}
-                className={`btn ${cameraActive ? 'btn-danger' : 'btn-emerald'}`}
-                style={{ width: '100%', padding: '14px 20px', fontSize: 15, marginBottom: 12 }}
-              >
-                {cameraActive ? <CameraOff size={20} /> : <Camera size={20} />}
-                {cameraActive ? 'Stop Live Camera' : 'Start Live Camera'}
-              </button>
-
-              {cameraActive && (
-                <button
-                  onClick={handleVerifyAiSnapshot}
-                  disabled={aiLoading}
-                  className="btn btn-primary"
-                  style={{ width: '100%', padding: '12px 18px', fontSize: 13.5, marginBottom: 12 }}
-                >
-                  <Sparkles size={16} />
-                  {aiLoading ? 'Verifying...' : '🧠 AI Double-Check Snapshot'}
-                </button>
-              )}
-
-              {/* Mobile Phone Connection Guide Accordion */}
-              <button
-                onClick={() => setShowPhoneGuide(!showPhoneGuide)}
-                className="btn btn-secondary"
-                style={{
-                  width: '100%',
-                  padding: '9px 12px',
-                  fontSize: 12,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  borderColor: 'rgba(56, 189, 248, 0.3)',
-                  background: showPhoneGuide ? 'rgba(14, 165, 233, 0.1)' : undefined,
-                }}
-              >
-                <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#38bdf8', fontWeight: 600 }}>
-                  <Smartphone size={14} /> Connect Mobile Phone Camera Guide
-                </span>
-                {showPhoneGuide ? <ChevronUp size={14} color="#38bdf8" /> : <ChevronDown size={14} color="#38bdf8" />}
-              </button>
-
-              {showPhoneGuide && (
-                <div
-                  style={{
-                    marginTop: 10,
-                    padding: '12px 14px',
-                    background: 'rgba(15, 23, 42, 0.85)',
-                    borderRadius: 10,
-                    border: '1px solid rgba(56, 189, 248, 0.25)',
-                    fontSize: 12,
-                    color: '#cbd5e1',
-                    lineHeight: 1.55,
-                  }}
-                >
-                  <div style={{ fontWeight: 800, color: '#38bdf8', marginBottom: 4 }}>
-                    Option 1: Open Website on Phone (Instant & Wireless)
-                  </div>
-                  <div style={{ marginBottom: 10 }}>
-                    1. On your smartphone, open Chrome or Safari.<br />
-                    2. Go to: <b style={{ color: '#ffffff' }}>{window.location.origin}</b><br />
-                    3. Tap <b>Start Live Camera</b> and grant camera permission. It automatically activates your phone's back camera for overhead packing!
+              {cameraSourceType === 'local' ? (
+                <>
+                  {/* Camera Source Selector & Flip */}
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <label style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8' }}>
+                        📷 Camera Source / Input
+                      </label>
+                      <button
+                        onClick={handleFlipCamera}
+                        className="btn btn-secondary"
+                        title="Flip camera (Back / Front / Alternate)"
+                        style={{ padding: '4px 8px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
+                      >
+                        <RotateCcw size={12} /> Flip
+                      </button>
+                    </div>
+                    <select
+                      value={selectedDeviceId}
+                      onChange={handleDeviceChange}
+                      style={{
+                        width: '100%',
+                        background: '#0f172a',
+                        border: '1px solid rgba(255,255,255,0.15)',
+                        borderRadius: 8,
+                        padding: '8px 12px',
+                        color: '#ffffff',
+                        fontSize: 12.5,
+                        outline: 'none',
+                      }}
+                    >
+                      <option value="">
+                        {facingMode === 'environment' ? '📱 Mobile Back Camera / Default' : '🤳 Mobile Front Camera / Default'}
+                      </option>
+                      {videoDevices.map((dev, idx) => (
+                        <option key={dev.deviceId || idx} value={dev.deviceId}>
+                          {dev.label || `Camera ${idx + 1}`}
+                        </option>
+                      ))}
+                    </select>
                   </div>
 
-                  <div style={{ fontWeight: 800, color: '#34d399', marginBottom: 4 }}>
-                    Option 2: Use Phone as PC Webcam (DroidCam / Iriun)
+                  <button
+                    onClick={toggleCamera}
+                    className={`btn ${cameraActive ? 'btn-danger' : 'btn-emerald'}`}
+                    style={{ width: '100%', padding: '14px 20px', fontSize: 15, marginBottom: 12 }}
+                  >
+                    {cameraActive ? <CameraOff size={20} /> : <Camera size={20} />}
+                    {cameraActive ? 'Stop Live Camera' : 'Start Live Camera'}
+                  </button>
+
+                  {cameraActive && (
+                    <button
+                      onClick={handleVerifyAiSnapshot}
+                      disabled={aiLoading}
+                      className="btn btn-primary"
+                      style={{ width: '100%', padding: '12px 18px', fontSize: 13.5, marginBottom: 12 }}
+                    >
+                      <Sparkles size={16} />
+                      {aiLoading ? 'Verifying...' : '🧠 AI Double-Check Snapshot'}
+                    </button>
+                  )}
+                </>
+              ) : (
+                <>
+                  {/* Remote Phone Camera Status Box */}
+                  <div style={{ padding: '14px', background: 'rgba(15, 23, 42, 0.7)', borderRadius: 10, border: '1px solid rgba(56, 189, 248, 0.25)', marginBottom: 14 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <span style={{ fontSize: 12.5, fontWeight: 800, color: '#38bdf8' }}>📱 Phone Streamer</span>
+                      <span style={{
+                        padding: '3px 8px',
+                        borderRadius: 6,
+                        fontSize: 11,
+                        fontWeight: 700,
+                        background: remotePhoneConnected ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.2)',
+                        color: remotePhoneConnected ? '#34d399' : '#f59e0b',
+                        border: `1px solid ${remotePhoneConnected ? '#10b981' : '#f59e0b'}`,
+                      }}>
+                        {remotePhoneConnected ? '● Connected' : '○ Waiting'}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.5 }}>
+                      {remotePhoneConnected
+                        ? 'Your mobile camera is streaming live to this laptop! Full AI counting is running.'
+                        : 'Open the QR code or link on the right in your phone’s Chrome browser. Zero apps needed!'}
+                    </div>
                   </div>
-                  <div>
-                    1. Install free <b>DroidCam</b> or <b>Iriun Webcam</b> on your mobile & PC.<br />
-                    2. Connect both to the same Wi-Fi or via USB cable.<br />
-                    3. Select <b>DroidCam Source</b> or <b>Iriun</b> from the "Camera Source" dropdown above and click <b>Start Live Camera</b>!
-                  </div>
-                </div>
+
+                  {remotePhoneConnected && (
+                    <button
+                      onClick={handleVerifyAiSnapshot}
+                      disabled={aiLoading}
+                      className="btn btn-primary"
+                      style={{ width: '100%', padding: '12px 18px', fontSize: 13.5, marginBottom: 12 }}
+                    >
+                      <Sparkles size={16} />
+                      {aiLoading ? 'Verifying...' : '🧠 AI Double-Check Snapshot'}
+                    </button>
+                  )}
+                </>
               )}
             </div>
 
@@ -1459,12 +1713,54 @@ export default function App() {
             >
               <video ref={videoRef} playsInline muted style={{ display: 'none' }} />
 
-              {cameraActive && liveData.annotated_frame ? (
+              {((cameraActive && cameraSourceType === 'local') || (cameraSourceType === 'remote' && remotePhoneConnected)) && liveData.annotated_frame ? (
                 <img
                   src={liveData.annotated_frame}
                   alt="Live Camera Feed"
                   style={{ width: '100%', height: 'auto', display: 'block', maxHeight: 560, objectFit: 'contain' }}
                 />
+              ) : cameraSourceType === 'remote' ? (
+                <div style={{ textAlign: 'center', padding: '36px 20px', maxWidth: 460 }}>
+                  <div style={{ display: 'inline-flex', padding: 12, background: 'rgba(56, 189, 248, 0.1)', borderRadius: 14, border: '1px solid rgba(56, 189, 248, 0.25)', marginBottom: 14 }}>
+                    <Smartphone size={32} color="#38bdf8" />
+                  </div>
+                  <div style={{ fontSize: 18, fontWeight: 900, color: '#f8fafc', marginBottom: 4 }}>
+                    Connect Mobile Camera (Zero Apps)
+                  </div>
+                  <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.5, marginBottom: 16 }}>
+                    Scan with your phone camera or open the link below in <b>Chrome</b> on your phone:
+                  </div>
+
+                  <div style={{ display: 'inline-block', background: '#0f172a', padding: 10, borderRadius: 12, border: '1px solid rgba(56, 189, 248, 0.3)', marginBottom: 14 }}>
+                    <img
+                      src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&color=38-189-248&bgcolor=15-23-42&data=${encodeURIComponent(`${window.location.origin}/cam`)}`}
+                      alt="Phone Camera QR Code"
+                      style={{ width: 170, height: 170, display: 'block', borderRadius: 6 }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', background: '#0f172a', padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)', marginBottom: 12 }}>
+                    <span style={{ fontSize: 12.5, color: '#38bdf8', flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
+                      {`${window.location.origin}/cam`}
+                    </span>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(`${window.location.origin}/cam`);
+                        setCopiedLink(true);
+                        setTimeout(() => setCopiedLink(false), 2500);
+                      }}
+                      className="btn btn-secondary"
+                      style={{ padding: '6px 12px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}
+                    >
+                      {copiedLink ? <Check size={13} color="#34d399" /> : <Copy size={13} />}
+                      {copiedLink ? 'Copied' : 'Copy Link'}
+                    </button>
+                  </div>
+
+                  <div style={{ fontSize: 12, color: '#64748b' }}>
+                    💡 <b>Works via USB or Wi-Fi</b>: Connect phone with USB cable (enable USB tethering) or Wi-Fi. The phone acts as the camera; this laptop stays as your main dashboard!
+                  </div>
+                </div>
               ) : (
                 <div style={{ textAlign: 'center', padding: '50px 20px', color: '#64748b' }}>
                   <Camera size={52} style={{ margin: '0 auto 12px', opacity: 0.4 }} />
